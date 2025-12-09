@@ -1,0 +1,12 @@
+name: html2md_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - requests
+  - beautifulsoup4
+  - pandas
+  - pip
+  - pip:
+    - python-dotenv
