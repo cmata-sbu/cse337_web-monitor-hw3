@@ -31,7 +31,10 @@ def title_to_md_filename(title: str) -> str:
     # Collapse multiple spaces -> 1 underscore, strip, and cast to lowercase
     safe_txt = re.sub(r"\s+", "_", safe_txt.strip().lower())
 
-    return f"{safe_txt}.md"
+    # Append date-time stamp in the same format used for the archive
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    return f"{safe_txt}_{timestamp}.md"
 
 def should_download(download_date: str, today:datetime.date) -> bool:
     """
@@ -51,6 +54,31 @@ def should_download(download_date: str, today:datetime.date) -> bool:
         logging.error(f"Invalid date format: {download_date}")
         return False
     return target <= today
+
+def download_page(url: str) -> str:
+    """
+    Fetch the HTML content of a URL, which will be returned in a raw HTML string.
+    Will handle HTTP errors by printing an error message to stderr with the HTTP status code
+    
+    :param url: Desired webpage URL for download
+    :type url: str
+    :return: raw HTML string
+    :rtype: str
+    """
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.text
+    except requests.HTTPError as http_err:
+        # Page is unreachable - log status and keep going
+        print(f"Error fetching {url}: HTTP {http_err.response.status_code}", file=sys.stderr)
+        return None
+    except requests.RequestException as req_err:
+        # Network problems (DNS, timeout, etc.)
+        print(f"Error fetching {url}: {req_err}", file=sys.stderr)
+        return None
+
+    
 
 # main driver function
 def main(csv_path, output_dir):
