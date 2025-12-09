@@ -19,11 +19,38 @@ def title_to_md_filename(title: str) -> str:
     Lower-case, replace non-alphanumerics with underscores,
     strip leading/trailing
     
-    :param title: Description
+    :param title: Title of the website which will appear in the .md filename
     :type title: str
-    :return: Description
+    :return: Returns a .md filename to use when saving the file.
     :rtype: str
     """
+
+    # Keep only alphanumerics and spaces
+    safe_txt = re.sub(r"[^A-Za-z0-9 ]+", " ", title)
+
+    # Collapse multiple spaces -> 1 underscore, strip, and cast to lowercase
+    safe_txt = re.sub(r"\s+", "_", safe_txt.strip().lower())
+
+    return f"{safe_txt}.md"
+
+def should_download(download_date: str, today:datetime.date) -> bool:
+    """
+    Rwturn True if `download_date` is on or before `today`.
+    Dates are in ISO format YYYY-MM-DD
+    
+    :param download_date: Date of the HTML file download
+    :type download_date: str
+    :param today: Today's Date
+    :type today: datetime.date
+    :rtype: bool
+    """
+
+    try:
+        target = datetime.datetime.strptime(download_date, "%Y-%m-%d").date()
+    except ValueError:
+        logging.error(f"Invalid date format: {download_date}")
+        return False
+    return target <= today
 
 # main driver function
 def main(csv_path, output_dir):
@@ -48,7 +75,22 @@ def main(csv_path, output_dir):
     md_dir = Path(output_dir / "tmp_md")
     md_dir.mkdir(parents=True, exist_ok=True)
 
-    print(md_dir)
+    # Process each row
+    for title, url, dl_date in rows:
+        if not should_download(dl_date, date):
+            logging.info(f"Skipping {url} - scheduled for future...")
+            continue
+
+        html = download_page(url)
+        if html is None:
+            continue
+
+        md_text = html_to_markdown(html)
+        md_file = md_dir / title_to_md_filename(title)
+        write_markdown(md_file, md_text)
+
+    # Finally, create the archive
+
 
 # main entry point
 if __name__ == "__main__":
