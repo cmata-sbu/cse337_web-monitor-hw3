@@ -1,0 +1,1 @@
+30 3 * * * $HOME/ise337/hw3/src/html2md.py $HOME/ise337/hw3/input.csv $HOME/ise337/hw3/output_dir >> $HOME/ise337/hw3/downloads.log 2>&1

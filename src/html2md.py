@@ -2,6 +2,9 @@
 """
 html2md: Download a list of URLs, convert the HTML to Markdown,
 and pack all Markdown files into a .tar.gz archive
+
+Usage: 
+    ./src/html2md.py source_file output_dir
 """
 
 import os, re, sys, logging
