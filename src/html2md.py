@@ -14,6 +14,7 @@ import requests
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 from typing import cast
+import hashlib
 
 # Helps with casting
 InlineNode = Tag | NavigableString
@@ -21,7 +22,14 @@ InlineNode = Tag | NavigableString
 # global variable for date/time when program executes
 now = DateTime.datetime.now()
 
-def title_to_md_filename(title: str) -> str:
+# Title Helpers
+
+def title_convertor(title: str) -> str:
+    safe_txt = re.sub(r"[^A-Za-z0-9 ]+", " ", title)
+    safe_txt = re.sub(r"\s+", "_", safe_txt.strip().lower())
+    return safe_txt
+
+def md_filename_with_md5_hash(title: str, url: str) -> str:
     """
     Transform a page title into a safe Markdown filename.
     Lower-case, replace non-alphanumerics with underscores,
@@ -29,20 +37,15 @@ def title_to_md_filename(title: str) -> str:
     
     :param title: Title of the website which will appear in the .md filename
     :type title: str
+    :param url: url of website for md5 hash to be retrived for
     :return: Returns a .md filename to use when saving the file.
     :rtype: str
     """
+    safe_name = title_convertor(title)
+    md5_txt = hashlib.md5(url.encode("utf-8")).hexdigest()[:8]
+    return f"{safe_name}_{md5_txt}.md"
 
-    # Keep only alphanumerics and spaces
-    safe_txt = re.sub(r"[^A-Za-z0-9 ]+", " ", title)
-
-    # Collapse multiple spaces -> 1 underscore, strip, and cast to lowercase
-    safe_txt = re.sub(r"\s+", "_", safe_txt.strip().lower())
-
-    # Append date-time stamp in the same format used for the archive
-    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-
-    return f"{safe_txt}_{timestamp}.md"
+# Title Helpers END
 
 def should_download(download_date: str) -> bool:
     """
