@@ -5,10 +5,10 @@ and pack all Markdown files into a .tar.gz archive
 """
 
 import os, re, sys, logging
-import argparse, csv, tarfile
+import argparse, csv, tarfile, shutil
 import datetime as DateTime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -76,6 +76,17 @@ def download_page(url: str) -> str | None:
     :return: raw HTML string
     :rtype: str
     """
+
+    parsed = urlparse(url)
+    if parsed.scheme == "file":
+        # This is a local file
+        try:
+            local_path = unquote(parsed.path)
+            with open(local_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except OSError as e:
+            print(f"Error reading local file {url}: {e}", file=sys.stderr)
+            return None
 
     headers = {
         "User-Agent": (
@@ -224,7 +235,7 @@ def _format_list_item(li: Tag, depth: int, list_type: str, list_indent: int, ind
         # Nested lists inside this <li>
         if isinstance(child, Tag) and child.name in ("ul", "ol"):
             nested_parts.append(
-                _format_block(child, depth, list_indent=list_indent + 2)
+                _format_block(child, depth + 1, list_indent=list_indent + 2)
             )
         else:
             # Regular inline content of the final item
@@ -245,8 +256,9 @@ def _format_list_item(li: Tag, depth: int, list_type: str, list_indent: int, ind
     if not text and not nested_parts:
         return ""
 
-    line = f"{indent_spaces}{marker}{text}\n"
-    return line
+    lines = [f"{indent_spaces}{marker}{text}\n"]
+    lines.extend(nested_parts)
+    return "\n".join(line.rstrip("\n") for line in lines) + "\n"
 
 def _format_blockquote(bq: Tag, depth: int = 0, list_indent: int = 0) -> str:
     """
@@ -331,9 +343,10 @@ def _format_block(node: Tag | NavigableString, depth: int = 0, list_indent: int 
             md += _format_paragraph(node, list_indent)
         case "ul" | "ol":
             list_type = "ol" if node.name == "ol" else "ul"
+            indent = 2 * depth
             # Process list items recursively
             for idx, li in enumerate(node.find_all("li", recursive=False), start=1):
-                md += _format_list_item(li, depth=depth + 1, list_type=list_type, list_indent=list_indent, index=idx if list_type == "ol" else None)
+                md += _format_list_item(li, depth=depth + 1, list_type=list_type, list_indent=indent, index=idx if list_type == "ol" else None)
             md += "\n"
         case "blockquote":
             md += _format_blockquote(node, depth, list_indent)
@@ -374,11 +387,15 @@ def html_to_markdown(html: str) -> str | None:
         print(f"Error finding main content div in article!", file=sys.stderr)
         return None
     
-    # Remove everything that should be ignored #
+    # Markdown Page TITLE
+    page_title_tag = soup.find("h1", id="firstHeading")
 
-    # Remove Hat-Notes/References
+    # Remove everything that should be ignored #
+    # Remove Hatnotes/References
     for sup in main.find_all("sup", class_="reference"):
         sup.decompose()
+    for hat in main.find_all("div", class_="hatnote"):
+        hat.decompose()
 
     # Remove edit links
     for edit in main.find_all("span", class_="mw-editsection"):
@@ -392,9 +409,12 @@ def html_to_markdown(html: str) -> str | None:
     for nav in main.find_all("div", class_="navbox-data"):
         nav.decompose()
 
-    # Remove Tables & infoboxes
+    # Remove Tables & infoboxes & ToC
     for tbl in main.find_all("table"):
         tbl.decompose()
+
+    toc = main.find("div", id="toc")
+    if toc: toc.decompose()
 
     # Remove Images & figures
     for img in main.find_all(["img", "figure"]):
@@ -407,11 +427,33 @@ def html_to_markdown(html: str) -> str | None:
     # Remove references at end
     for refL in main.find_all("div", class_="reflist"):
         refL.decompose()
-
     for refB in main.find_all("div", class_="refbegin"):
         refB.decompose()
 
+    # Remove any extern links
+    for h2 in main.find_all("h2"):
+        span = h2.find("span", id="External_links")
+        if span or (h2.get_text(strip=True).lower() == "external links"):
+            # remove h2 and all siblings until next h2
+            next = h2.next_sibling
+            h2.decompose()
+
+            while next:
+                current = next
+                next = next.next_sibling
+                if isinstance(current, Tag) and current.name == "h2":
+                    break
+                if isinstance(current, Tag):
+                    current.decompose()
+            break
+
+
     markdown_parts = []
+
+    if page_title_tag:
+        title_txt = page_title_tag.get_text(strip=True)
+        markdown_parts.append(f"# {title_txt}\n\n")
+
     for child in main.contents:
         part = _format_block(cast(InlineNode, child))
         if part:
@@ -423,7 +465,11 @@ def html_to_markdown(html: str) -> str | None:
 
 # main driver function
 def main(csv_path, output_dir):
-    date = now.today()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Make a temp dir for the created Markdown files
+    md_dir = Path(output_dir / "tmp_md")
+    md_dir.mkdir(parents=True, exist_ok=True)
 
     # Read the CSV file
     rows = []
@@ -440,10 +486,6 @@ def main(csv_path, output_dir):
         print(f"Error parsing CSV file {csv_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Make a temp dir for the created Markdown files
-    md_dir = Path(output_dir / "tmp_md")
-    md_dir.mkdir(parents=True, exist_ok=True)
-
     # Process each row
     for title, url, dl_date in rows:
         if not should_download(dl_date):
@@ -455,10 +497,29 @@ def main(csv_path, output_dir):
             continue
 
         md_text = html_to_markdown(html)
-        md_file = md_dir / title_to_md_filename(title)
-        # write_markdown(md_file, md_text)
+        md_file = md_dir / md_filename_with_md5_hash(title, url)
 
-    # Finally, create the archive
+        if md_text is None: continue
+
+        header = f"<!-- title: {title} -->\n<-- url: {url} -->\n\n"
+        with md_file.open("w", encoding="utf-8") as f:
+            f.write(header + md_text)
+
+    # If no markdown folders were made, bail out
+    md_files = list(md_dir.glob("*.md"))
+    if not md_files:
+        print("No markdown files created; no archive generated.", file=sys.stderr)
+        return
+    
+    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+    archive_path = output_dir / f"{timestamp}.tar.gz"
+
+    with tarfile.open(archive_path, "w:gz") as tar:
+        for mf in md_files:
+            tar.add(mf, arcname=mf.name)
+
+    # Clean up tempdir
+    shutil.rmtree(md_dir)
 
 
 # main entry point
